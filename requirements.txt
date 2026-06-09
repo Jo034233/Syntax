@@ -1,5 +1,8 @@
 streamlit
-requests
 groq
-extra-streamlit-components
 streamlit-cookies-controller
+pypdf
+python-docx
+pandas
+openpyxl
+moviepy
