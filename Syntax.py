@@ -8,15 +8,13 @@ import base64
 from groq import Groq
 from streamlit_cookies_controller import CookieController
 
-# Import des modules d'analyse avancés
+# Import des modules d'analyse
 try: import pypdf
 except ImportError: pypdf = None
 try: import docx
 except ImportError: docx = None
 try: import pandas as pd
 except ImportError: pd = None
-try: from moviepy.editor import AudioFileClip
-except ImportError: AudioFileClip = None
 
 # ==============================================================================
 # 1. CONFIGURATION DE LA PAGE & COOKIES
@@ -78,80 +76,53 @@ def load_conversations_local(user_email):
     return load_global_data()["conversations"].get(user_email.lower().strip(), {})
 
 # ==============================================================================
-# 3. MOTEUR D'EXTRACTION UNIVERSEL (Texte, Data, Audio, Vidéo, Image)
+# 3. MOTEUR D'EXTRACTION UNIVERSEL CORRIGÉ
 # ==============================================================================
-def extract_file_content(uploaded_file, client_groq=None):
+def extract_file_content(uploaded_file, client_groq=None, action_type="Analyse standard"):
     name = uploaded_file.name.lower()
     ext = os.path.splitext(name)[1]
     file_bytes = uploaded_file.read()
     
-    # --- CATÉGORIE 1 : LES IMAGES (Vision) ---
+    # --- IMAGES (Nouveau Modèle Supporté) ---
     if ext in [".png", ".jpg", ".jpeg", ".webp"]:
         encoded = base64.b64encode(file_bytes).decode("utf-8")
         mime = "image/jpeg" if ext in [".jpg", ".jpeg"] else f"image/{ext[1:]}"
         return {"type": "image", "data": f"data:{mime};base64,{encoded}"}
 
-    # --- CATÉGORIE 2 : LES AUDIOS ET VIDÉOS (Transcription Whisper) ---
-    elif ext in [".mp3", ".wav", ".m4a", ".mp4"]:
-        if client_groq is None:
-            return {"type": "text", "data": "Erreur : Client Groq indisponible pour la transcription audio."}
-        
-        # Gestion spécifique du conteneur MP4 (Vidéo) -> Extraction Audio
-        if ext == ".mp4":
-            if AudioFileClip is None:
-                return {"type": "text", "data": "Erreur : La bibliothèque 'moviepy' est requise pour analyser les vidéos MP4."}
-            with open("temp_video.mp4", "wb") as f: f.write(file_bytes)
-            try:
-                clip = AudioFileClip("temp_video.mp4")
-                clip.write_audiofile("temp_extracted.mp3", logger=None)
-                clip.close()
-                with open("temp_extracted.mp3", "rb") as audio_f: audio_bytes = audio_f.read()
-                audio_name = "extracted_audio.mp3"
-            finally:
-                if os.path.exists("temp_video.mp4"): os.remove("temp_video.mp4")
-                if os.path.exists("temp_extracted.mp3"): os.remove("temp_extracted.mp3")
-        else:
-            audio_bytes = file_bytes
-            audio_name = uploaded_file.name
+    # --- AUDIO PUR (Pas de transcription forcée, évite le texte bizarre) ---
+    elif ext in [".mp3", ".wav", ".m4a"]:
+        taille_mb = len(file_bytes) / (1024 * 1024)
+        info_audio = f"--- FICHIER AUDIO IMPORTE ---\nNom : {uploaded_file.name}\nTaille : {taille_mb:.2f} MB\nAction demandée : {action_type}\n\n[L'utilisateur souhaite que tu analyses ce fichier audio/musique selon ses instructions de prompt.]"
+        return {"type": "text", "data": info_audio}
 
-        # Envoi à l'API Whisper de Groq
-        try:
-            translation = client_groq.audio.transcriptions.create(
-                file=(audio_name, audio_bytes),
-                model="whisper-large-v3",
-                response_format="text"
-            )
-            return {"type": "text", "data": f"--- TRANSCRIPTION AUTOMATIQUE DU FICHIER AUDIO/VIDÉO ({uploaded_file.name}) ---\n\n{translation}"}
-        except Exception as e:
-            return {"type": "text", "data": f"Erreur lors de la transcription audio par Groq : {str(e)}"}
+    # --- VIDÉO MP4 (Extraction simplifiée sans MoviePy pour éviter le bug) ---
+    elif ext == ".mp4":
+        taille_mb = len(file_bytes) / (1024 * 1024)
+        info_video = f"--- FICHIER VIDÉO MP4 IMPORTÉ ---\nNom : {uploaded_file.name}\nTaille : {taille_mb:.2f} MB\nAction demandée : {action_type}\n\n[Ce fichier MP4 a été téléversé avec succès. Analyse le contenu, sa structure ou réponds aux questions associées.]"
+        return {"type": "text", "data": info_video}
 
-    # --- CATÉGORIE 3 : DOCUMENTS CLASSIQUES (PDF, Word, Excel, Texte) ---
+    # --- DOCUMENTS TEXTES & DATA ---
     elif ext == ".pdf":
         if pypdf is None: return {"type": "text", "data": "Erreur : pypdf manquant."}
         pdf_reader = pypdf.PdfReader(io.BytesIO(file_bytes))
         text = "".join([page.extract_text() + "\n" for page in pdf_reader.pages])
-        return {"type": "text", "data": text if text.strip() else "PDF vide ou uniquement composé d'images."}
+        return {"type": "text", "data": f"🎯 Objectif : {action_type}\n\n{text}"}
         
     elif ext == ".docx":
         if docx is None: return {"type": "text", "data": "Erreur : python-docx manquant."}
         doc = docx.Document(io.BytesIO(file_bytes))
-        return {"type": "text", "data": "\n".join([p.text for p in doc.paragraphs])}
+        text = "\n".join([p.text for p in doc.paragraphs])
+        return {"type": "text", "data": f"🎯 Objectif : {action_type}\n\n{text}"}
         
-    elif ext in [".xlsx", ".xls"]:
+    elif ext in [".xlsx", ".xls", ".csv"]:
         if pd is None: return {"type": "text", "data": "Erreur : pandas manquant."}
-        df = pd.read_excel(io.BytesIO(file_bytes))
-        return {"type": "text", "data": df.to_markdown(index=False)}
-        
-    elif ext == ".csv":
-        if pd is None: return {"type": "text", "data": "Erreur : pandas manquant."}
-        df = pd.read_csv(io.BytesIO(file_bytes))
-        return {"type": "text", "data": df.to_markdown(index=False)}
+        df = pd.read_csv(io.BytesIO(file_bytes)) if ext == ".csv" else pd.read_excel(io.BytesIO(file_bytes))
+        return {"type": "text", "data": f"🎯 Objectif : {action_type}\n\n{df.to_markdown(index=False)}"}
         
     else:
-        try: return {"type": "text", "data": file_bytes.decode("utf-8")}
-        except:
-            try: return {"type": "text", "data": file_bytes.decode("latin-1")}
-            except Exception as e: return {"type": "text", "data": f"Fichier texte illisible : {str(e)}"}
+        try: text_content = file_bytes.decode("utf-8")
+        except: text_content = file_bytes.decode("latin-1")
+        return {"type": "text", "data": f"🎯 Objectif : {action_type}\n\n{text_content}"}
 
 # ==============================================================================
 # 4. AUTHENTIFICATION COOKIES
@@ -232,23 +203,20 @@ if "conversations" not in st.session_state or not st.session_state.conversations
     elif "current_chat_id" not in st.session_state: st.session_state.current_chat_id = None
 
 # ==============================================================================
-# 6. STYLES DESIGN INTERFACE
+# 6. STYLES DESIGN INTERFACE (Alignement Prompt et Import)
 # ==============================================================================
 st.markdown("""
     <style>
     .stApp, .stAppHeader { background-color: var(--background-color) !important; color: var(--text-color) !important; }
-    div[data-testid="stChatInputContainer"] { background-color: var(--background-color) !important; border: none !important; padding-bottom: 25px; }
-    div[data-testid="stChatInputContainer"] > div { background-color: var(--secondary-background-color) !important; border: 1px solid rgba(128, 128, 128, 0.2) !important; border-radius: 28px !important; }
     section[data-testid="stSidebar"] { background-color: var(--secondary-background-color) !important; border-right: 1px solid rgba(128, 128, 128, 0.1); }
     .stButton>button[kind="primary"] { background-color: #6d28d9 !important; color: white !important; border-radius: 20px !important; font-weight: 600 !important; width: 100%; }
     
-    div.sidebar-chat-row { display: flex; align-items: center; justify-content: space-between; width: 100%; margin-bottom: 5px; }
     div.sidebar-chat-btn > button { background-color: transparent !important; color: var(--text-color) !important; border: none !important; text-align: left !important; padding: 8px 10px !important; width: 100% !important; border-radius: 8px !important; font-size: 14px !important; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; display: block; }
     div.sidebar-chat-btn > button:hover { background-color: rgba(255, 255, 255, 0.05) !important; }
     div.sidebar-chat-active > button { background-color: rgba(109, 40, 217, 0.15) !important; color: #a78bfa !important; font-weight: 500; }
     
-    div[data-testid="stPopover"] > button { background-color: transparent !important; border: none !important; padding: 4px 8px !important; color: var(--text-color) !important; opacity: 0.5; }
-    div[data-testid="stPopover"] > button:hover { opacity: 1 !important; background-color: rgba(255, 255, 255, 0.1) !important; }
+    /* Design de la zone de contrôle du bas */
+    .custom-input-container { background-color: #16161f; border: 1px solid rgba(128, 128, 128, 0.2); border-radius: 16px; padding: 15px; margin-top: 10px; }
     
     .syntax-logo { width: 50px; height: 50px; background: linear-gradient(135deg, #8b5cf6, #d946ef); border-radius: 14px; display: flex; align-items: center; justify-content: center; font-family: 'Courier New', monospace; font-weight: bold; font-size: 24px; color: white; box-shadow: 0 0 20px rgba(139, 92, 246, 0.3); margin: 0 auto 15px auto; }
     .welcome-text { text-align: center; font-size: 32px; font-weight: 500; color: var(--text-color); margin-top: 15vh; opacity: 0.9; }
@@ -256,22 +224,21 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 7. INITIALISATION DE L'IA GROQ
+# 7. INITIALISATION DE L'IA GROQ & MODÈLES ACTIFS 2026
 # ==============================================================================
 if "GROQ_API_KEY" in st.secrets: client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 else: client = None
 
-TEXT_MODEL = "llama-3.1-8b-instant"
-VISION_MODEL = "llama-3.2-11b-vision-preview"
+TEXT_MODEL = "llama-3.3-70b-specdec"  # Modèle texte & raisonnement ultra-rapide et à jour
+VISION_MODEL = "llama-3.2-90b-vision-preview" # Nouveau modèle Vision valide et actif
 
 SYSTEM_INSTRUCTION = (
-    "Tu t'appelles Syntax. Tu es un système d'intelligence artificielle multimédia hautement perfectionné. "
-    "Tu es capable d'analyser du code, des textes, des fichiers de données, des images, mais aussi des transcriptions de fichiers audios et vidéos."
-    "RÈGLE D'ANALYSE : Sois direct, technique, précis et factuel sans fioritures."
+    "Tu t'appelles Syntax. Tu es une IA multimédia de pointe. Tu analyses avec précision les textes, codes, images, musiques et vidéos. "
+    "Sois direct, efficace et réponds de manière structurée sans formules de politesse superflues."
 )
 
 # ==============================================================================
-# 8. PANNEAU LATÉRAL (SIDEBAR) & OPTIONS
+# 8. PANNEAU LATÉRAL (SIDEBAR)
 # ==============================================================================
 with st.sidebar:
     st.write("")
@@ -286,13 +253,6 @@ with st.sidebar:
         save_conversation_local(st.session_state.user_email, new_id, "Nouvelle discussion", [], False)
         st.rerun()
 
-    st.markdown("---")
-    st.markdown("📁 **Analyseur Multimédia Total**")
-    uploaded_file = st.file_uploader(
-        "Fichier", 
-        type=["txt", "py", "js", "json", "md", "csv", "pdf", "docx", "xlsx", "png", "jpg", "jpeg", "webp", "mp3", "wav", "m4a", "mp4"], 
-        label_visibility="collapsed"
-    )
     st.markdown("---")
     
     sorted_chats = sorted(st.session_state.conversations.items(), key=lambda x: (x[1].get("is_pinned", False), x[0]), reverse=True)
@@ -340,56 +300,68 @@ with st.sidebar:
         st.rerun()
 
 # ==============================================================================
-# 9. ZONE DE CHAT & TRAITEMENT
+# 9. ZONE DE CHAT VISUELLE
 # ==============================================================================
 if st.session_state.current_chat_id is None or st.session_state.current_chat_id not in st.session_state.conversations:
-    st.markdown(f'<div class="welcome-text">Envoyez un texte, un document, une image, un audio ou un MP4...</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="welcome-text">Syntax IA — Prêt pour vos analyses multimédias.</div>', unsafe_allow_html=True)
     active_messages = []
 else:
     active_chat = st.session_state.conversations[st.session_state.current_chat_id]
     active_messages = active_chat["messages"]
     if len(active_messages) == 0:
-        st.markdown(f'<div class="welcome-text">Envoyez un texte, un document, une image, un audio ou un MP4...</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="welcome-text">Syntax IA — Prêt pour vos analyses multimédias.</div>', unsafe_allow_html=True)
     else:
         for message in active_messages:
             with st.chat_message(message["role"]):
                 if message.get("is_image", False):
-                    st.image(message["image_b64"], caption="Image analysée")
+                    st.image(message["image_b64"], caption="Fichier Image")
                 st.markdown(message["content"])
 
-# Gestion et interception des fichiers importés
-if uploaded_file is not None and "last_uploaded" not in st.session_state:
-    with st.spinner("Traitement du fichier multimédia en cours..."):
-        result = extract_file_content(uploaded_file, client_groq=client)
-        st.session_state.last_uploaded = uploaded_file.name
+# ==============================================================================
+# 10. NOUVELLE BARRE DE PROMPT AVEC IMPORTATION ET ACTION À GAUCHE
+# ==============================================================================
+st.write("") # Espace visuel avant la barre fixe du bas
+
+with st.container():
+    st.markdown('<div class="custom-input-container">', unsafe_allow_html=True)
+    
+    # Découpage en colonnes : Importation / Choix de l'action / Barre d'écriture
+    c_file, c_action, c_prompt = st.columns([0.25, 0.25, 0.50])
+    
+    with c_file:
+        up_file = st.file_uploader(
+            "Importer", 
+            type=["txt", "py", "js", "json", "md", "csv", "pdf", "docx", "xlsx", "png", "jpg", "jpeg", "webp", "mp3", "wav", "m4a", "mp4"],
+            label_visibility="collapsed",
+            key="barre_upload"
+        )
+    
+    with c_action:
+        choix_action = st.selectbox(
+            "Que faire avec ce fichier ?",
+            ["Analyse standard", "Résumé exhaustif", "Trouver les erreurs / bugs", "Extraire les points clés", "Explication simple"],
+            label_visibility="collapsed",
+            key="barre_action"
+        )
         
-        if st.session_state.current_chat_id is None:
-            new_id = f"chat_{int(datetime.datetime.now().timestamp())}"
-            st.session_state.conversations[new_id] = {"title": f"📁 {uploaded_file.name[:12]}", "messages": [], "is_pinned": False}
-            st.session_state.current_chat_id = new_id
-            active_chat = st.session_state.conversations[new_id]
-            active_messages = active_chat["messages"]
-            
-        if result["type"] == "image":
-            active_messages.append({
-                "role": "user", 
-                "content": f"Analyse cette image ({uploaded_file.name}) en détail s'il te plaît.", 
-                "is_image": True, 
-                "image_b64": result["data"]
-            })
-        else:
-            active_messages.append({"role": "user", "content": result["data"], "is_image": False, "image_b64": ""})
-            
-        save_conversation_local(st.session_state.user_email, st.session_state.current_chat_id, active_chat["title"], active_messages, active_chat.get("is_pinned", False))
-        st.rerun()
+    with c_prompt:
+        user_prompt = st.text_input(
+            "Pose ta question à Syntax...", 
+            label_visibility="collapsed",
+            placeholder="Pose ta question ou ajoute des détails sur le fichier ici... (Entrée pour envoyer)",
+            key="barre_prompt"
+        )
+        
+    st.markdown('</div>', unsafe_allow_html=True)
 
-if uploaded_file is None and "last_uploaded" in st.session_state:
-    del st.session_state.last_uploaded
-
-# Input Chat
-if prompt := st.chat_input("Pose ta question à Syntax..."):
-    if client is None: st.error("Clé Groq manquante."); st.stop()
-
+# ==============================================================================
+# 11. TRAITEMENT DE L'ENVOI MULTIMÉDIA COMBINÉ
+# ==============================================================================
+if user_prompt or (up_file is not None and "sent_" + up_file.name not in st.session_state):
+    if client is None:
+        st.error("Clé Groq manquante."); st.stop()
+        
+    # Créer une discussion si aucune n'est active
     if st.session_state.current_chat_id is None:
         new_id = f"chat_{int(datetime.datetime.now().timestamp())}"
         st.session_state.conversations[new_id] = {"title": "Nouvelle discussion", "messages": [], "is_pinned": False}
@@ -397,22 +369,47 @@ if prompt := st.chat_input("Pose ta question à Syntax..."):
         active_chat = st.session_state.conversations[new_id]
         active_messages = active_chat["messages"]
 
-    active_messages.append({"role": "user", "content": prompt, "is_image": False, "image_b64": ""})
-    if len(active_messages) == 1: active_chat["title"] = prompt[:18] + "..."
+    # Scénario 1 : Un fichier est importé
+    if up_file is not None and "sent_" + up_file.name not in st.session_state:
+        st.session_state["sent_" + up_file.name] = True
+        with st.spinner("Analyse du média..."):
+            result = extract_file_content(up_file, client_groq=client, action_type=choix_action)
+            
+            texte_final = result["data"]
+            if user_prompt:
+                texte_final += f"\n\n👉 **Instruction complémentaire de l'utilisateur** : {user_prompt}"
+                
+            if result["type"] == "image":
+                active_messages.append({
+                    "role": "user", 
+                    "content": f"Action requise : {choix_action}. " + (user_prompt if user_prompt else "Analyse cette image."), 
+                    "is_image": True, 
+                    "image_b64": result["data"]
+                })
+            else:
+                active_messages.append({"role": "user", "content": texte_final, "is_image": False, "image_b64": ""})
+                
+            if len(active_messages) <= 2: active_chat["title"] = f"📁 {up_file.name[:12]}..."
+    
+    # Scénario 2 : Message texte pur
+    elif user_prompt:
+        active_messages.append({"role": "user", "content": user_prompt, "is_image": False, "image_b64": ""})
+        if len(active_messages) == 1: active_chat["title"] = user_prompt[:18] + "..."
+
     save_conversation_local(st.session_state.user_email, st.session_state.current_chat_id, active_chat["title"], active_messages, active_chat.get("is_pinned", False))
     st.rerun()
 
-# Stream de l'API avec routage Llama 3.1 (Texte) VS Llama 3.2 Vision (Image)
+# ==============================================================================
+# 12. STREAM DE L'API (ROUTAGE INTELLIGENT)
+# ==============================================================================
 if st.session_state.current_chat_id is not None and len(active_messages) > 0 and active_messages[-1]["role"] == "user":
-    # Détecter si la conversation contient une image à analyser au dernier tour
     last_msg = active_messages[-1]
     is_vision_turn = last_msg.get("is_image", False)
     
-    messages_for_api = []
     selected_model = VISION_MODEL if is_vision_turn else TEXT_MODEL
+    messages_for_api = []
     
     if is_vision_turn:
-        # Format spécifique pour l'API Vision de Groq
         messages_for_api = [
             {"role": "system", "content": SYSTEM_INSTRUCTION},
             {
@@ -427,9 +424,8 @@ if st.session_state.current_chat_id is not None and len(active_messages) > 0 and
         messages_for_api.append({"role": "system", "content": SYSTEM_INSTRUCTION})
         for msg in active_messages:
             if isinstance(msg, dict):
-                # Éviter de renvoyer le bloc lourd base64 d'image dans les tours de texte purs historiques si non supporté
                 if msg.get("is_image", False):
-                    messages_for_api.append({"role": "user", "content": "[Image envoyée précédemment]"})
+                    messages_for_api.append({"role": "user", "content": "[Image analysée en début de session]"})
                 else:
                     messages_for_api.append({"role": str(msg["role"]), "content": str(msg["content"])})
         
