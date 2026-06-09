@@ -2,3 +2,4 @@ streamlit
 requests
 groq
 extra-streamlit-components
+streamlit-cookies-controller
