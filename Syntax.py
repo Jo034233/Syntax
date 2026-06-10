@@ -210,8 +210,7 @@ ACTIVE_MODEL = "llama-3.1-8b-instant"
 SYSTEM_INSTRUCTION = (
     "Tu t'appelles Syntax. Tu es un système d'intelligence artificielle hautement perfectionné. "
     "COMPÉTENCES LINGUISTIQUES : Ta communication doit être claire, fluide et précise. "
-    "CHAMPS DE CONNAISSANCES : Expert en sciences, technologies et santé. "
-    "RÈGLE D'ANALYSE : Si on te fournit un fichier, analyse-le directement et factuellement sans blabla de génération."
+    "CHAMPS DE CONNAISSANCES : Expert en sciences, technologies et santé."
 )
 
 # ==============================================================================
@@ -230,9 +229,6 @@ with st.sidebar:
         save_conversation_local(st.session_state.user_email, new_id, "Nouvelle discussion", [], False)
         st.rerun()
 
-    st.markdown("---")
-    st.markdown("📁 **Analyseur de fichiers**")
-    uploaded_file = st.file_uploader("Fichier", type=["txt", "py", "js", "json", "md", "csv"], label_visibility="collapsed")
     st.markdown("---")
     
     sorted_chats = sorted(
@@ -304,29 +300,6 @@ else:
     else:
         for message in active_messages:
             with st.chat_message(message["role"]): st.markdown(message["content"])
-
-# Module fichier
-if uploaded_file is not None and "last_uploaded" not in st.session_state:
-    try:
-        file_content = uploaded_file.read().decode("utf-8")
-        st.session_state.last_uploaded = uploaded_file.name
-        prompt_analyse = f"ANALYSE DE FICHIER DIRECTE :\nNom : {uploaded_file.name}\nContenu :\n```\n{file_content}\n```"
-        
-        if st.session_state.current_chat_id is None:
-            new_id = f"chat_{int(datetime.datetime.now().timestamp())}"
-            st.session_state.conversations[new_id] = {"title": f"📊 {uploaded_file.name[:12]}", "messages": [], "is_pinned": False}
-            st.session_state.current_chat_id = new_id
-            active_chat = st.session_state.conversations[new_id]
-            active_messages = active_chat["messages"]
-            
-        active_messages.append({"role": "user", "content": prompt_analyse})
-        save_conversation_local(st.session_state.user_email, st.session_state.current_chat_id, active_chat["title"], active_messages, active_chat.get("is_pinned", False))
-        st.rerun()
-    except Exception as e:
-        st.error(f"Erreur fichier : {e}")
-
-if uploaded_file is None and "last_uploaded" in st.session_state:
-    del st.session_state.last_uploaded
 
 # Input Chat
 if prompt := st.chat_input("Pose ta question à Syntax..."):
